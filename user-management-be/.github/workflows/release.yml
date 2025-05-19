@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+
+env:
+  MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version -DinstallAtEnd=true --file pom.xml"
+  MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=WARN -Dorg.slf4j.simpleLogger.showDateTime=true -Djava.awt.headless=true"
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      issues: write
+      pull-requests: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Configure Git
+      run: |
+        git config --global user.name 'GitHub Actions'
+        git config --global user.email 'github-actions@github.com'
+
+    - name: Get current version
+      id: get_version
+      run: |
+        CURRENT_VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+        echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+    - name: Calculate new version
+      id: calculate_version
+      run: |
+        CURRENT_VERSION=${{ steps.get_version.outputs.current_version }}
+        RELEASE_TYPE=${{ github.event.inputs.release_type }}
+        
+        # Remove -SNAPSHOT suffix if present
+        BASE_VERSION=${CURRENT_VERSION%-SNAPSHOT}
+        
+        # Split version into components
+        IFS='.' read -r -a VERSION_PARTS <<< "$BASE_VERSION"
+        MAJOR="${VERSION_PARTS[0]}"
+        MINOR="${VERSION_PARTS[1]}"
+        PATCH="${VERSION_PARTS[2]}"
+        
+        # Increment appropriate version component
+        case $RELEASE_TYPE in
+          major)
+            NEW_VERSION="$((MAJOR + 1)).0.0"
+            ;;
+          minor)
+            NEW_VERSION="$MAJOR.$((MINOR + 1)).0"
+            ;;
+          patch)
+            NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+            ;;
+        esac
+        
+        echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "next_version=$NEW_VERSION-SNAPSHOT" >> $GITHUB_OUTPUT
+
+    - name: Update version in pom.xml
+      run: |
+        mvn versions:set -DnewVersion=${{ steps.calculate_version.outputs.new_version }}
+        git add pom.xml
+        git commit -m "Release version ${{ steps.calculate_version.outputs.new_version }}"
+        git tag -a "v${{ steps.calculate_version.outputs.new_version }}" -m "Release version ${{ steps.calculate_version.outputs.new_version }}"
+
+    - name: Generate changelog
+      uses: TriPSs/conventional-changelog-action@v3
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        version-file: './pom.xml'
+        output-file: 'CHANGELOG.md'
+        skip-version-file: true
+        skip-commit: true
+        release-count: 0
+        tag-prefix: 'v'
+
+    - name: Build and test
+      run: |
+        mvn $MAVEN_CLI_OPTS clean verify
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: Release v${{ steps.calculate_version.outputs.new_version }}
+        body_path: CHANGELOG.md
+        draft: false
+        prerelease: false
+        files: |
+          target/*.jar
+          target/*.war
+        tag_name: v${{ steps.calculate_version.outputs.new_version }}
+
+    - name: Update to next snapshot version
+      run: |
+        mvn versions:set -DnewVersion=${{ steps.calculate_version.outputs.next_version }}
+        git add pom.xml
+        git commit -m "Prepare next development version"
+        git push origin main
+        git push origin "v${{ steps.calculate_version.outputs.new_version }}"
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ${{ secrets.DOCKERHUB_USERNAME }}/microservice-template:v${{ steps.calculate_version.outputs.new_version }}
+          ${{ secrets.DOCKERHUB_USERNAME }}/microservice-template:latest
+        cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/microservice-template:buildcache
+        cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/microservice-template:buildcache,mode=max 

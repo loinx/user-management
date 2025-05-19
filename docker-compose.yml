@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./user-management-fe
+      dockerfile: Dockerfile
+    container_name: user-management-fe
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - user-management-network
+    environment:
+      - VITE_API_URL=http://backend:8080
+      - VITE_APP_NAME=User Management System
+
+  backend:
+    build:
+      context: ./user-management-be
+      dockerfile: Dockerfile
+    container_name: user-management-be
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/user_management_system
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=postgres
+      - JWT_SECRET=your-256-bit-secret
+      - SPRING_APPLICATION_NAME=User Management System
+    depends_on:
+      - db
+    networks:
+      - user-management-network
+
+  db:
+    image: postgres:14-alpine
+    container_name: user-management-db
+    environment:
+      - POSTGRES_DB=user_management_system
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - user_management_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - user-management-network
+
+networks:
+  user-management-network:
+    name: user-management-network
+    driver: bridge
+
+volumes:
+  user_management_data:
+    name: user-management-data 

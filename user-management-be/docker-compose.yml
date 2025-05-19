@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      # JVM Security Options
+      - JAVA_OPTS=-Xms512m -Xmx1024m -XX:+UseG1GC -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/app/ -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8
+      # Spring Security Options
+      - SPRING_PROFILES_ACTIVE=prod
+      - SPRING_SECURITY_USER_NAME=${ADMIN_USER:-admin}
+      - SPRING_SECURITY_USER_PASSWORD=${ADMIN_PASSWORD:-changeme}
+      - SPRING_SECURITY_USER_ROLES=ADMIN
+      # JWT Security
+      - JWT_SECRET=${JWT_SECRET:-your-256-bit-secret}
+      - JWT_EXPIRATION=86400000
+      # Database Security
+      - SPRING_DATASOURCE_URL=jdbc:h2:mem:testdb;DB_CLOSE_ON_EXIT=FALSE;DB_CLOSE_DELAY=-1
+      - SPRING_DATASOURCE_DRIVERCLASSNAME=org.h2.Driver
+      - SPRING_DATASOURCE_USERNAME=${DB_USER:-sa}
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD:-}
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.H2Dialect
+      - SPRING_H2_CONSOLE_ENABLED=false
+      # Security Headers
+      - SERVER_TOMCAT_REMOTEIP_REMOTEIPHEADER=X-Forwarded-For
+      - SERVER_TOMCAT_REMOTEIP_PROTOCOLHEADER=X-Forwarded-Proto
+      - SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES=10\\.0\\.0\\.0/8|172\\.16\\.0\\.0/12|192\\.168\\.0\\.0/16
+      # Logging Security
+      - LOGGING_LEVEL_ROOT=INFO
+      - LOGGING_LEVEL_COM_TEMPLATE_MSA=DEBUG
+      - LOGGING_PATTERN_CONSOLE=%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n
+      # Time and Locale
+      - TZ=UTC
+      - LANG=en_US.UTF-8
+      - LC_ALL=en_US.UTF-8
+    volumes:
+      - ./logs:/var/log/app:rw
+      - ./config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-H", "X-Forwarded-Proto: https", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16 
